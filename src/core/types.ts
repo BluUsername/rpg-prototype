@@ -135,6 +135,15 @@ export interface LootTable {
   entries: LootEntry[];
 }
 
+// --- Action bar (hotbar) ---
+
+export const ACTION_BAR_SLOTS = 9;
+
+export interface ActionBar {
+  /** Each slot holds an item ID or null. Using a slot consumes from inventory. */
+  slots: (string | null)[];
+}
+
 // --- Entity (with inventory) ---
 
 export interface Entity {
@@ -147,5 +156,6 @@ export interface Entity {
   color: string;
   symbol: string;
   inventory: Inventory;
+  actionBar: ActionBar;
   lootTable?: LootTable;
 }

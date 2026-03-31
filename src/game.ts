@@ -3,13 +3,16 @@
 // ============================================================
 
 import {
-  Entity, GamePhase, Direction, Position, GameMap, WorldItem,
+  Entity, GamePhase, Direction, Position, GameMap, WorldItem, ItemType,
 } from './core/types';
 import { createTestMap, isWalkable, computeFOV } from './systems/map';
 import { createPlayer, createSkeleton, createGoblin, createOrc } from './entities/factory';
 import { resolveCombat } from './systems/combat';
 import { getEnemyAction, directionDelta } from './systems/ai';
-import { addItemToInventory, useItemFromSlot, rollLoot } from './systems/inventory';
+import {
+  addItemToInventory, useItemFromSlot, rollLoot,
+  useFromActionBar, assignToActionBar, clearActionBarSlot, findEmptyActionBarSlot,
+} from './systems/inventory';
 import { getItemDef } from './data/items';
 import { InputHandler } from './core/input';
 import { Renderer } from './ui/renderer';
@@ -31,13 +34,14 @@ export class Game {
     this.renderer = new Renderer(canvas);
     this.input = new InputHandler(canvas);
 
-    // Create map
     this.map = createTestMap();
 
-    // Create player in starting room (with a starter potion)
+    // Create player with starter items
     this.player = createPlayer({ x: 4, y: 4 });
     addItemToInventory(this.player.inventory, 'health_potion_small', 2);
     addItemToInventory(this.player.inventory, 'bread', 1);
+    // Pre-assign starter potion to action bar slot 1
+    assignToActionBar(this.player.actionBar, 0, 'health_potion_small');
     this.entities.push(this.player);
 
     // Spawn enemies
@@ -60,11 +64,10 @@ export class Game {
     this.input.onRightClick((x, y) => this.handleRightClick(x, y));
     this.input.onMouseMove((x, y) => this.handleMouseMove(x, y));
 
-    // Initial FOV
     computeFOV(this.map, this.player.pos, 7);
 
     this.log('You awaken in a dark dungeon. Find your way out.');
-    this.log('WASD: Move | Space: Wait | E: Pickup | I: Inventory | 1-9: Use item');
+    this.log('WASD: Move | E: Pickup | I: Inventory | 1-9: Action bar');
 
     this.tick();
   }
@@ -90,7 +93,7 @@ export class Game {
     }
   }
 
-  // --- Inventory actions (free actions, no AP cost) ---
+  // --- Inventory ---
 
   private toggleInventory(): void {
     if (this.phase === GamePhase.GameOver) return;
@@ -132,32 +135,80 @@ export class Game {
   }
 
   private handleSelectSlot(slot: number): void {
-    if (slot >= this.player.inventory.maxSlots) return;
-    this.selectedSlot = slot;
+    if (this.inventoryOpen) {
+      // In inventory: select inventory slot
+      if (slot < this.player.inventory.maxSlots) {
+        this.selectedSlot = slot;
+      }
+    } else {
+      // Outside inventory: use action bar slot
+      this.useActionBarSlot(slot);
+    }
   }
 
   private handleUseSelected(): void {
     if (this.phase === GamePhase.GameOver) return;
 
-    const slot = this.player.inventory.slots[this.selectedSlot];
-    if (!slot) return;
-
-    const result = useItemFromSlot(this.player.inventory, this.selectedSlot, this.player);
-    if (result) {
-      this.log(result);
+    if (this.inventoryOpen) {
+      // Use from inventory
+      const slot = this.player.inventory.slots[this.selectedSlot];
+      if (!slot) return;
+      const result = useItemFromSlot(this.player.inventory, this.selectedSlot, this.player);
+      if (result) this.log(result);
     }
   }
 
+  private useActionBarSlot(barSlot: number): void {
+    if (this.phase === GamePhase.GameOver) return;
+    const result = useFromActionBar(
+      this.player.actionBar, barSlot, this.player.inventory, this.player
+    );
+    if (result) this.log(result);
+  }
+
+  private assignSelectedToActionBar(): void {
+    const slot = this.player.inventory.slots[this.selectedSlot];
+    if (!slot) return;
+
+    const def = getItemDef(slot.itemId);
+    if (!def) return;
+
+    // Find first empty action bar slot
+    const emptySlot = findEmptyActionBarSlot(this.player.actionBar);
+    if (emptySlot === -1) {
+      this.log('Action bar is full! Right-click a slot to clear it.');
+      return;
+    }
+
+    assignToActionBar(this.player.actionBar, emptySlot, slot.itemId);
+    this.log(`Assigned ${def.name} to action bar slot ${emptySlot + 1}.`);
+  }
+
+  // --- Mouse handlers ---
+
   private handleClick(x: number, y: number): void {
+    // Check action bar click (always available)
+    const abSlot = this.renderer.getActionBarSlotAt(x, y);
+    if (abSlot >= 0) {
+      this.useActionBarSlot(abSlot);
+      return;
+    }
+
     if (!this.inventoryOpen) return;
 
-    // Check if clicking the "Use" button
+    // Check "Use" button
     if (this.renderer.isUseButtonAt(x, y, this.player.inventory.maxSlots)) {
       this.handleUseSelected();
       return;
     }
 
-    // Check if clicking an inventory slot
+    // Check "Assign" button
+    if (this.renderer.isAssignButtonAt(x, y, this.player.inventory.maxSlots)) {
+      this.assignSelectedToActionBar();
+      return;
+    }
+
+    // Check inventory slot click
     const slot = this.renderer.getSlotAtPosition(x, y, this.player.inventory.maxSlots);
     if (slot >= 0) {
       this.selectedSlot = slot;
@@ -165,9 +216,21 @@ export class Game {
   }
 
   private handleRightClick(x: number, y: number): void {
+    // Right-click action bar: clear slot
+    const abSlot = this.renderer.getActionBarSlotAt(x, y);
+    if (abSlot >= 0) {
+      const itemId = this.player.actionBar.slots[abSlot];
+      if (itemId) {
+        const def = getItemDef(itemId);
+        clearActionBarSlot(this.player.actionBar, abSlot);
+        this.log(`Cleared ${def?.name ?? 'item'} from action bar slot ${abSlot + 1}.`);
+      }
+      return;
+    }
+
     if (!this.inventoryOpen) return;
 
-    // Right-click on a slot: select + use immediately
+    // Right-click inventory slot: select + use
     const slot = this.renderer.getSlotAtPosition(x, y, this.player.inventory.maxSlots);
     if (slot >= 0) {
       this.selectedSlot = slot;
@@ -176,14 +239,22 @@ export class Game {
   }
 
   private handleMouseMove(x: number, y: number): void {
+    // Action bar hover (always active)
+    const abSlot = this.renderer.getActionBarSlotAt(x, y);
+    this.renderer.setHoveredActionBarSlot(abSlot);
+
     if (!this.inventoryOpen) {
       this.renderer.setHoveredSlot(-1);
       return;
     }
 
-    // Check if hovering the "Use" button (use -2 as sentinel)
+    // Inventory button hover
     if (this.renderer.isUseButtonAt(x, y, this.player.inventory.maxSlots)) {
       this.renderer.setHoveredSlot(-2);
+      return;
+    }
+    if (this.renderer.isAssignButtonAt(x, y, this.player.inventory.maxSlots)) {
+      this.renderer.setHoveredSlot(-3);
       return;
     }
 
@@ -245,12 +316,10 @@ export class Game {
 
   private spawnLoot(enemy: Entity): void {
     if (!enemy.lootTable) return;
-
     const drops = rollLoot(enemy.lootTable, enemy.pos);
     for (const drop of drops) {
       this.worldItems.push(drop);
     }
-
     if (drops.length > 0) {
       this.log(`${enemy.name} dropped some items.`);
     }
@@ -265,10 +334,7 @@ export class Game {
   private endPlayerTurn(): void {
     this.phase = GamePhase.EnemyTurn;
     this.input.setEnabled(false);
-
-    setTimeout(() => {
-      this.processEnemyTurns();
-    }, 150);
+    setTimeout(() => this.processEnemyTurns(), 150);
   }
 
   private processEnemyTurns(): void {
@@ -297,10 +363,7 @@ export class Game {
           }
         } else if (action.type === 'move' && action.direction) {
           const delta = directionDelta(action.direction);
-          enemy.pos = {
-            x: enemy.pos.x + delta.x,
-            y: enemy.pos.y + delta.y,
-          };
+          enemy.pos = { x: enemy.pos.x + delta.x, y: enemy.pos.y + delta.y };
           enemy.stats.ap -= 1;
         } else {
           enemy.stats.ap = 0;

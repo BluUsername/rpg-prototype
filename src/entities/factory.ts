@@ -3,7 +3,7 @@
 // ============================================================
 
 import { Entity, EntityType, Position } from '../core/types';
-import { createInventory } from '../systems/inventory';
+import { createInventory, createActionBar } from '../systems/inventory';
 import { LOOT_TABLES } from '../data/loot-tables';
 
 let nextId = 0;
@@ -30,6 +30,7 @@ export function createPlayer(pos: Position): Entity {
     color: '#4fc3f7',
     symbol: '@',
     inventory: createInventory(20),
+    actionBar: createActionBar(),
   };
 }
 
@@ -52,6 +53,7 @@ export function createSkeleton(pos: Position): Entity {
     color: '#e0e0e0',
     symbol: 'S',
     inventory: createInventory(0),
+    actionBar: createActionBar(),
     lootTable: LOOT_TABLES.skeleton,
   };
 }
@@ -75,6 +77,7 @@ export function createGoblin(pos: Position): Entity {
     color: '#66bb6a',
     symbol: 'G',
     inventory: createInventory(0),
+    actionBar: createActionBar(),
     lootTable: LOOT_TABLES.goblin,
   };
 }
@@ -98,6 +101,7 @@ export function createOrc(pos: Position): Entity {
     color: '#a5d6a7',
     symbol: 'O',
     inventory: createInventory(0),
+    actionBar: createActionBar(),
     lootTable: LOOT_TABLES.orc,
   };
 }
